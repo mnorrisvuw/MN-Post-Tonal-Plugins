@@ -13,14 +13,12 @@ import FileIO 3.0
 
 MuseScore {
 	version:  "1.0"
-	description: "This plugin generates a series of ‘Harmonic Rotations’, as developed by Ernst Krenek, Igor Stravinsky, Pierre Boulez and others"
-	menuPath: "Plugins.MNHarmonicRotation";
+	description: "This plugin creates Harmonic Pivoting"
+	menuPath: "Plugins.MNHarmonicPivoting";
 	requiresScore: true
-	title: "MN Harmonic Rotation"
-	id: mnharmonicrotation
-	thumbnailName: "MNHarmonicRotation.png"
-	FileIO { id: versionnumberfile; source: Qt.resolvedUrl("./assets/versionnumber.txt").toString().slice(8); onError: { console.log(msg); } }
-
+	title: "MN Harmonic Pivoting"
+	id: mnharmonicpivoting
+	thumbnailName: "MNHarmonicPivoting.png"
 	
 	// ** DEBUG **
 	property var debug: true
@@ -29,12 +27,12 @@ MuseScore {
 	
 	// **** PROPERTIES **** //
 	property var pitches: []
+	property var pcs: []
 	property var intervals: []
-	property var rotationType: 0
 
   onRun: {
 		if (!curScore) return;
-		dialog.titleText = 'MN HARMONIC ROTATION';
+		dialog.titleText = 'MN HARMONIC PIVOTING';
 		
 		// ** VERSION CHECK ** //
 		if (MuseScore.mscoreMajorVersion < 4 || (MuseScore.mscoreMajorVersion == 4 && MuseScore.mscoreMajorVersion < 4)) {
@@ -45,14 +43,12 @@ MuseScore {
 		options.open();
 	}
 	
-	function doRotation () {
-		rotationType = options.rotationType;
+	function doPivoting () {
 		options.close();
 		//logError ('Rotation type = '+rotationType);
 		// **** CHECK SELECTION **** //
 		var staves = curScore.staves;
 		var numStaves = curScore.nstaves;
-		var versionNumber = versionnumberfile.read().trim();
 		var startStaff = curScore.selection.startStaff;
 		var endStaff = curScore.selection.endStaff;
 		var endTick = curScore.selection.endSegment.tick;
@@ -81,14 +77,17 @@ MuseScore {
 					return;
 				}
 				pitches.push(e.notes[0].pitch);
+				pcs.push(e.notes[0].pitch % 12);
 				lastBar = e.parent.parent;
 
 				//logError ('pushed');
 			} else {
 				if (etype == Element.NOTE) {
 					pitches.push(e.pitch);
+					var pc = e.pitch % 12;
+					pcs.push(pc);
 					lastBar = e.parent.parent.parent;
-					//logError ('pushed');
+					//logError ('pushed '+pc);
 				}
 			}
 		}
@@ -128,113 +127,196 @@ MuseScore {
 			dialog.show();
 			return;
 		}
+		
+		
+		// *** ADD A LAYOUT BREAK TO THE FINAL BAR *** //
+		var layoutBreakTick = lastBar.firstSegment.tick;
+		//logError ('Adding layout break at tick '+layoutBreakTick);
+		cursor.rewindToTick(layoutBreakTick);
+		var lb = newElement(Element.LAYOUT_BREAK);
+		lb.layoutBreakType = LayoutBreak.LINE;
+		curScore.startCmd();
+		cursor.add(lb);
+		curScore.endCmd();
+
+		// *** UPDATE TIME SIGNATURE *** //
 		cursor.rewindToTick(startTick);
 		var ts = newElement(Element.TIMESIG);
 		ts.timesig = fraction (numNotes,4);
 		curScore.startCmd();
 		cursor.add(ts);
 		curScore.endCmd();
-
-		// ** LOOP THROUGH ROTATION **//
-		// ** NB — endStaff IS EXCLUDED FROM RANGE — SEE MUSESCORE DOCS ** //
+		cursor.filter = Segment.ChordRest;
 		
-		var currentTransposition, currentTranspositionIndex, currentRotation, currentRotationTransposition, currentPitch = 0;
+		
+		// *** ADD '12 TRANSPOSITIONS' NOTES *** //
+		cursor.rewindToTick(startTick);
+		var comment = newElement(Element.TEMPO_TEXT);
+		comment.text = '12 TRANSPOSITIONS';
+		comment.frameType = 1;
+		comment.framePadding = 1.0;
+		curScore.startCmd();
+		cursor.add(comment);
+		curScore.endCmd();
 
-		for (currentTranspositionIndex = 0; currentTranspositionIndex < numNotes; currentTranspositionIndex ++) {
-			currentTransposition = pitches[currentTranspositionIndex]-pitches[0];
+		// ** LOOP THROUGH TRANSPOSITIONS **//
+		var currentTransposition, currentPitch = 0, pitch, pc, currentTick = startTick;
+		for (currentTransposition = 0; currentTransposition < 12; currentTransposition ++) {
 			
-			cursor.rewindToTick(startTick);
-			var comment = newElement(Element.STAFF_TEXT);
-			comment.text = 'Transposition '+(currentTranspositionIndex + 1);
-			cursor.add(comment);
-			var pitch;
-			for (currentRotation = 0; currentRotation < numNotes; currentRotation ++) {
-				
-
-				// ** REWIND TO START OF NEW BAR ** //
-				
-				switch (rotationType) {
-					
-					// STANDARD ROTATION
-					case 0:
-					case 1:
-						pitch = pitches[0] + currentTransposition;
-						break;
-					
-					// LINE CHAINING
-					case 2:
-					case 3:
-						if (currentRotation == 0) pitch = pitches[0] + currentTransposition;
-						break;
-					
-					// LINE STEERING
-					case 4:
-					case 5:
-						pitch = pitches[currentRotation] + currentTransposition;
-						break;
-				}
-				
-				curScore.startCmd();
+			// insert a system break every 4 bars
+			if ((currentTransposition + 1) % 4 == 0) {
 				cursor.rewindToTick(startTick);
-				cursor.setDuration(1,4); // set to crotchet
-				cursor.addNote(pitch,false);
+				var lb = newElement(Element.LAYOUT_BREAK);
+				lb.layoutBreakType = LayoutBreak.LINE;
+				curScore.startCmd();
+
+				cursor.add(lb);
 				curScore.endCmd();
-				//errorMsg += "\nTick "+cursor.tick+': adding '+pitch;
-				startTick += division;
-				var intervalIndex;
-				for (currentPitch = 1; currentPitch < numNotes; currentPitch ++) {
-					if (rotationType < 4) {
-						intervalIndex = (currentRotation + currentPitch - 1) % numNotes;
-						//errorMsg += "\nIntervalIndex = "+intervalIndex;
-					} else {
-						// LINE STEERING WE NEED TO ROTATE IN OPPOSITE DIRECTION
-						intervalIndex = currentPitch - currentRotation - 1;
-						if (intervalIndex < 0) intervalIndex += numNotes;
-					}
-					var interval = intervals[intervalIndex];
-					
-					// CALCULATE INVERTED INTERVAL?
-					if (rotationType % 2 == 1 && currentRotation % 2 == 1) interval *= -1;
-					pitch += interval;
-					
+
+			}
+			
+			pitch = pitches[0] + currentTransposition;
+			var numCommonTones = 0;
+			for (currentPitch = 0; currentPitch < numNotes; currentPitch ++) {
+				pc = pitch % 12;
+				var isCT = pcs.includes(pc);
+				numCommonTones += isCT;
+				
+				// add the Note at the current tick
+				curScore.startCmd();
+				cursor.rewindToTick(currentTick);
+				cursor.addNote(pitch,false);
+				
+				// addNote advances the cursor so we need to go back
+				cursor.rewindToTick(currentTick);
+				curScore.endCmd();
+				var theNote = cursor.element;
+				
+				// set to no stem, and a minim notehead if it's a new PC
+				theNote.noStem = true;
+				if (!isCT) theNote.notes[0].headType = NoteHeadType.HEAD_HALF;
+				
+				currentTick += division;
+				if (currentTick > (scoreEndTick - division)) {
 					curScore.startCmd();
-					cursor.rewindToTick(startTick);
-					cursor.addNote(pitch,false);
-					//cursor.next();
+					cmd('append-measure');
 					curScore.endCmd();
-					//errorMsg += "\nTick "+cursor.tick+': adding'+pitch;
-					startTick += division;
-					if (startTick > (scoreEndTick - division)) {
-						curScore.startCmd();
-						cmd('append-measure');
-						curScore.endCmd();
-						scoreEndTick = curScore.lastSegment.tick;
-						currentBar = currentBar.nextMeasure;
-						if (currentBar == null || currentBar == undefined) {
-							dialog.msg = "<p><font size=\"6\">🛑</font> HERE: Couldn’t create new bar</p> ";
-							dialog.show();
-							return;
-						}
-						if (startTick > (scoreEndTick - division)) {
-							dialog.msg = "<p><font size=\"6\">🛑</font> Couldn’t create enough to account for startTick</p> ";
-							dialog.show();
-							return;
-						}
+					scoreEndTick = curScore.lastSegment.tick;
+					currentBar = currentBar.nextMeasure;
+					if (currentBar == null || currentBar == undefined) {
+						dialog.msg = "<p><font size=\"6\">🛑</font> HERE: Couldn’t create new bar</p> ";
+						dialog.show();
+						return;
 					}
-					if (!cursor.measure.is(currentBar)) {
-						currentBar = cursor.measure;
-						clearMeasure (currentBar);
+					if (currentTick > (scoreEndTick - division)) {
+						dialog.msg = "<p><font size=\"6\">🛑</font> Couldn’t create enough to account for startTick</p> ";
+						dialog.show();
+						return;
 					}
 				}
+				if (!cursor.measure.is(currentBar)) {
+					currentBar = cursor.measure;
+					clearMeasure (currentBar);
+				}
+				if (currentPitch < numNotes - 1) pitch += intervals[currentPitch]
 			}
+			cursor.rewindToTick(startTick);
+			var comment = newElement(Element.FINGERING);
+			comment.text = 'T<sub>'+currentTransposition+'</sub> ('+numCommonTones+' CT)';
+			comment.align = 0;
+			curScore.startCmd();
+
+			cursor.add(comment);
+			curScore.endCmd();
+
+			startTick = currentTick;
+		}
+		cursor.rewindToTick(startTick);
+		var comment = newElement(Element.TEMPO_TEXT);
+		comment.text = '12 INVERSIONS';
+		comment.frameType = 1;
+		comment.framePadding = 1.0;
+		curScore.startCmd();
+
+		cursor.add(comment);
+		curScore.endCmd();
+
+		var currentInversion;
+		for (currentInversion = 0; currentInversion < 12; currentInversion ++) {
+			
+			// insert a system break every 4 bars
+			if ((currentInversion + 1) % 4 == 0) {
+				cursor.rewindToTick(startTick);
+				var lb = newElement(Element.LAYOUT_BREAK);
+				lb.layoutBreakType = LayoutBreak.LINE;
+				curScore.startCmd();
+				cursor.add(lb);
+				curScore.endCmd();
+			}
+			pitch = pitches[0] + currentInversion;
+			var numCommonTones = 0;
+			for (currentPitch = 0; currentPitch < numNotes; currentPitch ++) {
+				pc = pitch % 12;
+				var isCT = pcs.includes(pc);
+				numCommonTones += isCT;
+				
+				// add the note
+				curScore.startCmd();
+				cursor.rewindToTick(currentTick);
+				cursor.addNote(pitch,false);
+				// addNote advances the cursor so we need to go back
+				cursor.rewindToTick(currentTick);
+				curScore.endCmd();
+				
+				// set note to no stem and a minim notehead if it's a new pc
+				var theNote = cursor.element;
+				theNote.noStem = true;
+				if (!isCT) theNote.notes[0].headType = NoteHeadType.HEAD_HALF;
+				
+				currentTick += division;
+				if (currentTick > (scoreEndTick - division)) {
+					curScore.startCmd();
+					cmd('append-measure');
+					curScore.endCmd();
+					scoreEndTick = curScore.lastSegment.tick;
+					currentBar = currentBar.nextMeasure;
+					if (currentBar == null || currentBar == undefined) {
+						dialog.msg = "<p><font size=\"6\">🛑</font> HERE: Couldn’t create new bar</p> ";
+						dialog.show();
+						return;
+					}
+					if (currentTick > (scoreEndTick - division)) {
+						dialog.msg = "<p><font size=\"6\">🛑</font> Couldn’t create enough to account for startTick</p> ";
+						dialog.show();
+						return;
+					}
+				}
+				if (!cursor.measure.is(currentBar)) {
+					currentBar = cursor.measure;
+					clearMeasure (currentBar);
+				}
+				if (currentPitch < numNotes - 1) pitch -= intervals[currentPitch]
+			}
+			cursor.rewindToTick(startTick);
+			var comment = newElement(Element.FINGERING);
+			comment.text = 'T<sub>'+currentInversion+'</sub>I ('+numCommonTones+' CT)';
+			
+			comment.align = 0;
+			curScore.startCmd();
+			cursor.add(comment);
+			curScore.endCmd();
+
+			var pitch;
+			startTick = currentTick;
+			
 		}
 		
 		// ** SHOW INFO DIALOG ** //
 		if (errorMsg != "") errorMsg = "<p>————————————<p><p>ERROR LOG (for developer use):</p>" + errorMsg;
-		errorMsg = "<p>ROTATION COMPLETED</p><p><font size=\"6\">🎉</font></p>"+errorMsg;
+		errorMsg = "<p>PIVOTING COMPLETED</p><p><font size=\"6\">🎉</font> It is now a good idea to Select All and run Tools → Optimize Enharmonic Spellings.</p>"+errorMsg;
 		
 		dialog.msg = errorMsg;
-		dialog.titleText = 'MN HARMONIC ROTATION '+versionNumber;
+		dialog.titleText = 'MN HARMONIC PIVOTING';
 		dialog.show();
 	}
 	
@@ -267,16 +349,10 @@ MuseScore {
 	//MARK: OPTIONS DIALOG
 	StyledDialogView {
 		id: options
-		title: "MN HARMONIC ROTATION"
-		contentHeight: 400
+		title: "MN HARMONIC PIVOTING"
+		contentHeight: 300
 		contentWidth: 740
 		property color backgroundColor: ui.theme.backgroundSecondaryColor
-		
-		Settings {
-			property alias settingsRotationType: options.rotationType
-		}
-		
-		property var rotationType
 		
 		Text {
 			id: styleText
@@ -316,30 +392,12 @@ MuseScore {
 				topMargin: 20;
 				bottomMargin: 10;
 			}
-			text: "<p>Harmonic rotation is a 20th-century technique for generating new pitch fields/series by rotating and transposing a selected set of pitches. It was developed by Ernst Krenek, and was used by a number of composers such as Igor Stravinsky, Pierre Boulez and Oliver Knussen.</p><p>&nbsp;</p><p>This plugin will automatically generate a number of rotations for you, using a set of new algorithms devised by Michael Norris: STANDARD ROTATION is the original technique; LINE CHAINING uses the last pitch-class of each rotation to guide the transposition levels of the next rotation; LINE STEERING uses the original pitches to guide the transposition levels; INVERTED algorithms will invert the intervals in every second rotation.</p><p>&nbsp;</p><p>⚠️ This plug-in is intended to generate a number of pitch series, and will delete any notes to the right of the selected pitches. It is best used on a new blank score with the row in crotchets in the first bar.</P>"
+			text: "<p>‘Harmonic pivoting’ is a simple procedure of generating all 12 transpositions and 12 inversions of a pitch series, and for each one, calculating the number of common tones. This allows composers to understand which transpositions and inversions will sound ‘closer’ and which will sound more ‘distant’.</p><p>&nbsp;</p><p>🛑 This plug-in is intended to generate a number of pitch series, and will delete any notes to the right of the selected pitches. It is best used on a new blank score with the row in crotchets in the first bar.</P>"
 			font.pointSize: 14
 			color: ui.theme.fontPrimaryColor
 			wrapMode: Text.Wrap
 		}
 		
-		ComboBox {
-			id: comboBox
-			width: 300
-			height: 50
-			leftPadding: 10
-			currentIndex: options.rotationType
-			anchors {
-				left: parent.left;
-				leftMargin: 20;
-				top: infoText.bottom;
-				topMargin: 20;
-			}
-			model: ["Standard Rotation","Inverted Standard Rotation","Line Chaining","Inverted Line Chaining","Line Steering", "Inverted Line Steering"];
-			font.pointSize: 16
-			onCurrentIndexChanged: {
-				options.rotationType = comboBox.currentIndex;
-			}
-		}
 		FlatButton {
 			text: "Cancel"
 			width: 150
@@ -365,7 +423,7 @@ MuseScore {
 			navigationPanel.section: dialog.navigationSection
 			onStandardButtonClicked: function(buttonId) {
 				if (buttonId === ButtonBoxModel.Ok) {
-					doRotation()
+					doPivoting()
 				}
 			}
 		}
@@ -374,7 +432,7 @@ MuseScore {
 	
 	StyledDialogView {
 		id: dialog
-		title: "ROTATION COMPLETED"
+		title: "PIVOTING COMPLETED"
 		contentHeight: 252
 		contentWidth: 505
 		margins: 10
