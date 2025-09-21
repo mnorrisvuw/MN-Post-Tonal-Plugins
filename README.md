@@ -42,7 +42,7 @@ A suite of plug-ins for [MuseScore Studio 4.5](https://musescore.org/en) that au
 
 ### Direct Download
 
-Direct downloads of the Zip file can be found on the [releases page](https://github.com/mnorrisvuw/MNPostTonalPlugins/releases).
+Direct downloads of the Zip file can be found on the [releases page](https://github.com/mnorrisvuw/MN-Post-Tonal-Plugins/releases).
 
 ## <a id="use"></a>How to use
 * In a blank score, enter your pitches as crotchets/quarter notes in the first bar(s).
